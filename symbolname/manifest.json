@@ -1,0 +1,51 @@
+{
+  "schema_version": "3",
+  "url": "",
+  "parts": [
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part001",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part002",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part003",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part004",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part005",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part006",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part007",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part008",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part009",
+      "content_length": 4194304
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-simulate-assets/symbolname-db-simulate-27443161255-1-symbolname.pgd.zst.part010",
+      "content_length": 4194304
+    }
+  ],
+  "sha256": "d18e4ecc72a4a460ddc9bf6dd4f428b7f68f7ad23a7df309173fe2e2955605fa",
+  "generated_at": "2026-06-12T21:08:22.626482538Z",
+  "source_url": "simulate://archive",
+  "source_last_modified": "Wed, 10 Jun 2026 05:29:00 GMT",
+  "source_content_length": 41943040
+}
