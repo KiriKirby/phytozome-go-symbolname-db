@@ -52,7 +52,7 @@ jobs:
             PRERELEASE_FLAG="-prerelease"
             SAMPLE_FLAG="-sample"
             SIMULATE_FLAG=""
-            PART_SIZE="64"
+            PART_SIZE="$((4 * 1024))"
           elif [[ "${MODE}" == "simulate" ]]; then
             DB_BRANCH="symbolname-db-simulate"
             RELEASE_TAG="symbolname-db-simulate-assets"

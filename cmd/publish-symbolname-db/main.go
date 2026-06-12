@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type githubClient struct {
 	client     *http.Client
 	apiURL     string
 	retryDelay func(int) time.Duration
+	lastMutate time.Time
 }
 
 type refResponse struct {
@@ -59,6 +61,7 @@ type releaseAsset struct {
 	ID                 int64  `json:"id"`
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
+	State              string `json:"state,omitempty"`
 }
 
 type treeEntry struct {
@@ -360,12 +363,10 @@ func publishReleaseAssets(ctx context.Context, client githubClient, tag string, 
 			return fmt.Errorf("release asset file/name mismatch")
 		}
 		assetName := currentAssetNames[idx]
-		if existing := release.assetByName(assetName); existing != nil {
-			if err := client.deleteReleaseAsset(ctx, existing.ID); err != nil {
-				return fmt.Errorf("replace existing release asset %s: %w", assetName, err)
-			}
+		if err := client.deleteReleaseAssetByName(ctx, release.ID, assetName); err != nil {
+			return fmt.Errorf("replace existing release asset %s: %w", assetName, err)
 		}
-		asset, err := client.uploadReleaseAsset(ctx, release.UploadURL, assetName, filepath.Join(assetSourceDir, filepath.FromSlash(file.Path)))
+		asset, err := client.uploadReleaseAsset(ctx, release.ID, release.UploadURL, assetName, filepath.Join(assetSourceDir, filepath.FromSlash(file.Path)))
 		if err != nil {
 			return err
 		}
@@ -388,7 +389,11 @@ func cleanupReleaseAssets(ctx context.Context, client githubClient, tag string, 
 	if err != nil {
 		return err
 	}
-	for _, asset := range release.Assets {
+	assets, err := client.listReleaseAssets(ctx, release.ID)
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
 		if keep[asset.Name] || !strings.HasPrefix(asset.Name, cleanupPrefix) {
 			continue
 		}
@@ -443,7 +448,7 @@ func (r releaseResponse) assetByName(name string) *releaseAsset {
 	return nil
 }
 
-func (c githubClient) getOrCreateRelease(ctx context.Context, tag string, name string, prerelease bool) (releaseResponse, error) {
+func (c *githubClient) getOrCreateRelease(ctx context.Context, tag string, name string, prerelease bool) (releaseResponse, error) {
 	release, err := c.getReleaseByTag(ctx, tag)
 	if err == nil {
 		return release, nil
@@ -464,7 +469,7 @@ func (c githubClient) getOrCreateRelease(ctx context.Context, tag string, name s
 	return out, nil
 }
 
-func (c githubClient) getReleaseByTag(ctx context.Context, tag string) (releaseResponse, error) {
+func (c *githubClient) getReleaseByTag(ctx context.Context, tag string) (releaseResponse, error) {
 	var out releaseResponse
 	if err := c.requestJSON(ctx, http.MethodGet, "/releases/tags/"+url.PathEscape(tag), nil, &out, false); err != nil {
 		return releaseResponse{}, err
@@ -472,7 +477,7 @@ func (c githubClient) getReleaseByTag(ctx context.Context, tag string) (releaseR
 	return out, nil
 }
 
-func (c githubClient) uploadReleaseAsset(ctx context.Context, uploadURL string, name string, path string) (releaseAsset, error) {
+func (c *githubClient) uploadReleaseAsset(ctx context.Context, releaseID int64, uploadURL string, name string, path string) (releaseAsset, error) {
 	trimmed := strings.TrimSpace(uploadURL)
 	if idx := strings.Index(trimmed, "{"); idx >= 0 {
 		trimmed = trimmed[:idx]
@@ -494,6 +499,9 @@ func (c githubClient) uploadReleaseAsset(ctx context.Context, uploadURL string, 
 	attempts := 6
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := c.beforeMutation(ctx); err != nil {
+			return releaseAsset{}, err
+		}
 		file, err := os.Open(path)
 		if err != nil {
 			return releaseAsset{}, fmt.Errorf("open release asset %s: %w", path, err)
@@ -519,10 +527,13 @@ func (c githubClient) uploadReleaseAsset(ctx context.Context, uploadURL string, 
 		}
 		file.Close()
 		lastErr = err
+		if isStarterAssetRisk(err) {
+			_ = c.deleteReleaseAssetByName(ctx, releaseID, name)
+		}
 		if !isRetryableGitHubError(err) || attempt == attempts {
 			break
 		}
-		delay := c.delay(attempt)
+		delay := c.retryDelayForError(attempt, err)
 		fmt.Fprintf(os.Stdout, "GitHub release asset retry %d/%d after %s: %v\n", attempt+1, attempts, delay, err)
 		select {
 		case <-ctx.Done():
@@ -533,7 +544,7 @@ func (c githubClient) uploadReleaseAsset(ctx context.Context, uploadURL string, 
 	return releaseAsset{}, fmt.Errorf("upload release asset %s: %w", name, lastErr)
 }
 
-func (c githubClient) deleteReleaseAsset(ctx context.Context, id int64) error {
+func (c *githubClient) deleteReleaseAsset(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return nil
 	}
@@ -541,6 +552,40 @@ func (c githubClient) deleteReleaseAsset(ctx context.Context, id int64) error {
 		return err
 	}
 	return nil
+}
+
+func (c *githubClient) deleteReleaseAssetByName(ctx context.Context, releaseID int64, name string) error {
+	if releaseID <= 0 || strings.TrimSpace(name) == "" {
+		return nil
+	}
+	assets, err := c.listReleaseAssets(ctx, releaseID)
+	if err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		if asset.Name == name {
+			return c.deleteReleaseAsset(ctx, asset.ID)
+		}
+	}
+	return nil
+}
+
+func (c *githubClient) listReleaseAssets(ctx context.Context, releaseID int64) ([]releaseAsset, error) {
+	if releaseID <= 0 {
+		return nil, nil
+	}
+	var all []releaseAsset
+	for page := 1; page <= 100; page++ {
+		var out []releaseAsset
+		if err := c.requestJSON(ctx, http.MethodGet, fmt.Sprintf("/releases/%d/assets?per_page=100&page=%d", releaseID, page), nil, &out, true); err != nil {
+			return nil, err
+		}
+		all = append(all, out...)
+		if len(out) < 100 {
+			return all, nil
+		}
+	}
+	return all, fmt.Errorf("release %d has more than 10000 assets; refusing incomplete cleanup", releaseID)
 }
 
 func validatePublishFiles(files []publishFile, maxBlobBytes int64) (int64, error) {
@@ -589,7 +634,7 @@ func listPublishFiles(root string) ([]publishFile, error) {
 	return out, nil
 }
 
-func (c githubClient) getRef(ctx context.Context, branch string) (string, error) {
+func (c *githubClient) getRef(ctx context.Context, branch string) (string, error) {
 	var out refResponse
 	err := c.requestJSON(ctx, http.MethodGet, "/git/ref/heads/"+branch, nil, &out, false)
 	if err != nil {
@@ -598,7 +643,7 @@ func (c githubClient) getRef(ctx context.Context, branch string) (string, error)
 	return out.Object.SHA, nil
 }
 
-func (c githubClient) createBlob(ctx context.Context, path string) (string, error) {
+func (c *githubClient) createBlob(ctx context.Context, path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w", path, err)
@@ -614,7 +659,7 @@ func (c githubClient) createBlob(ctx context.Context, path string) (string, erro
 	return out.SHA, nil
 }
 
-func (c githubClient) createTree(ctx context.Context, entries []treeEntry) (string, error) {
+func (c *githubClient) createTree(ctx context.Context, entries []treeEntry) (string, error) {
 	body := map[string]any{"tree": entries}
 	var out treeResponse
 	if err := c.requestJSON(ctx, http.MethodPost, "/git/trees", body, &out, true); err != nil {
@@ -623,7 +668,7 @@ func (c githubClient) createTree(ctx context.Context, entries []treeEntry) (stri
 	return out.SHA, nil
 }
 
-func (c githubClient) createCommit(ctx context.Context, message string, treeSHA string, parentSHA string) (string, error) {
+func (c *githubClient) createCommit(ctx context.Context, message string, treeSHA string, parentSHA string) (string, error) {
 	body := map[string]any{"message": message, "tree": treeSHA}
 	if parentSHA != "" {
 		body["parents"] = []string{parentSHA}
@@ -635,7 +680,7 @@ func (c githubClient) createCommit(ctx context.Context, message string, treeSHA 
 	return out.SHA, nil
 }
 
-func (c githubClient) updateRef(ctx context.Context, branch string, commitSHA string, create bool) error {
+func (c *githubClient) updateRef(ctx context.Context, branch string, commitSHA string, create bool) error {
 	method := http.MethodPatch
 	path := "/git/refs/heads/" + branch
 	body := map[string]any{"sha": commitSHA, "force": true}
@@ -650,7 +695,7 @@ func (c githubClient) updateRef(ctx context.Context, branch string, commitSHA st
 	return nil
 }
 
-func (c githubClient) requestJSON(ctx context.Context, method string, path string, body any, out any, retry bool) error {
+func (c *githubClient) requestJSON(ctx context.Context, method string, path string, body any, out any, retry bool) error {
 	var payload []byte
 	var err error
 	if body != nil {
@@ -665,6 +710,11 @@ func (c githubClient) requestJSON(ctx context.Context, method string, path strin
 	}
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		if isMutatingMethod(method) {
+			if err := c.beforeMutation(ctx); err != nil {
+				return err
+			}
+		}
 		base := strings.TrimRight(c.apiURL, "/")
 		if base == "" {
 			base = "https://api.github.com"
@@ -688,7 +738,7 @@ func (c githubClient) requestJSON(ctx context.Context, method string, path strin
 		if !retry || !isRetryableGitHubError(err) || attempt == attempts {
 			break
 		}
-		delay := c.delay(attempt)
+		delay := c.retryDelayForError(attempt, err)
 		fmt.Fprintf(os.Stdout, "GitHub request retry %d/%d after %s: %v\n", attempt+1, attempts, delay, err)
 		select {
 		case <-ctx.Done():
@@ -699,17 +749,78 @@ func (c githubClient) requestJSON(ctx context.Context, method string, path strin
 	return lastErr
 }
 
-func (c githubClient) delay(attempt int) time.Duration {
+func (c *githubClient) delay(attempt int) time.Duration {
 	if c.retryDelay != nil {
 		return c.retryDelay(attempt)
 	}
 	return time.Duration(attempt*attempt) * 5 * time.Second
 }
 
+func (c *githubClient) retryDelayForError(attempt int, err error) time.Duration {
+	if c.retryDelay != nil {
+		return c.retryDelay(attempt)
+	}
+	var status githubStatusError
+	if errorAs(err, &status) {
+		if retryAfter := strings.TrimSpace(status.Headers.Get("Retry-After")); retryAfter != "" {
+			if seconds, parseErr := time.ParseDuration(retryAfter + "s"); parseErr == nil && seconds > 0 {
+				return seconds
+			}
+			if when, parseErr := http.ParseTime(retryAfter); parseErr == nil {
+				if delay := time.Until(when); delay > 0 {
+					return delay
+				}
+			}
+		}
+		if reset := strings.TrimSpace(status.Headers.Get("X-RateLimit-Reset")); reset != "" && (status.StatusCode == http.StatusTooManyRequests || status.StatusCode == http.StatusForbidden) {
+			if unix, parseErr := strconv.ParseInt(reset, 10, 64); parseErr == nil {
+				if delay := time.Until(time.Unix(unix, 0)); delay > 0 {
+					return delay
+				}
+			}
+		}
+		if status.StatusCode == http.StatusTooManyRequests || status.StatusCode == http.StatusForbidden {
+			return time.Minute
+		}
+	}
+	return c.delay(attempt)
+}
+
+func (c *githubClient) beforeMutation(ctx context.Context) error {
+	delay := time.Second
+	if c.retryDelay != nil {
+		delay = c.retryDelay(0)
+	}
+	if delay <= 0 {
+		return nil
+	}
+	if !c.lastMutate.IsZero() {
+		if wait := delay - time.Since(c.lastMutate); wait > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+	}
+	c.lastMutate = time.Now()
+	return nil
+}
+
+func isMutatingMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 type githubStatusError struct {
 	StatusCode int
 	Status     string
 	Body       string
+	Headers    http.Header
 }
 
 func (e githubStatusError) Error() string {
@@ -723,7 +834,7 @@ func decodeGitHubResponse(resp *http.Response, out any) error {
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return githubStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(data))}
+		return githubStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(data)), Headers: resp.Header.Clone()}
 	}
 	if out == nil || len(data) == 0 {
 		return nil
@@ -732,6 +843,14 @@ func decodeGitHubResponse(resp *http.Response, out any) error {
 		return err
 	}
 	return nil
+}
+
+func isStarterAssetRisk(err error) bool {
+	var status githubStatusError
+	if !errorAs(err, &status) {
+		return false
+	}
+	return status.StatusCode == http.StatusBadGateway
 }
 
 func isRetryableGitHubError(err error) bool {

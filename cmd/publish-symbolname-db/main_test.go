@@ -159,7 +159,7 @@ func TestUploadReleaseAssetRetriesServerError(t *testing.T) {
 		t.Fatalf("write asset: %v", err)
 	}
 	client := githubClient{token: "token", client: server.Client(), retryDelay: func(int) time.Duration { return 0 }}
-	asset, err := client.uploadReleaseAsset(t.Context(), server.URL+"/upload{?name,label}", "asset.bin", path)
+	asset, err := client.uploadReleaseAsset(t.Context(), 0, server.URL+"/upload{?name,label}", "asset.bin", path)
 	if err != nil {
 		t.Fatalf("uploadReleaseAsset() error = %v", err)
 	}
@@ -168,6 +168,106 @@ func TestUploadReleaseAssetRetriesServerError(t *testing.T) {
 	}
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts=%d, want 2", attempts.Load())
+	}
+}
+
+func TestUploadReleaseAssetDeletesStarterAssetAfterBadGateway(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "asset.bin")
+	if err := os.WriteFile(path, []byte("asset"), 0o644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	var uploads atomic.Int32
+	var listed atomic.Int32
+	var deleted atomic.Int32
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/upload":
+			if uploads.Add(1) == 1 {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"id":8,"name":"asset.bin","browser_download_url":"%s/download/asset.bin"}`, serverURL)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/releases/77/assets":
+			listed.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":6,"name":"asset.bin","state":"starter"}]`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/repos/owner/repo/releases/assets/6":
+			deleted.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	client := githubClient{repo: "owner/repo", token: "token", client: server.Client(), apiURL: server.URL, retryDelay: func(int) time.Duration { return 0 }}
+	asset, err := client.uploadReleaseAsset(t.Context(), 77, server.URL+"/upload{?name,label}", "asset.bin", path)
+	if err != nil {
+		t.Fatalf("uploadReleaseAsset() error = %v", err)
+	}
+	if asset.BrowserDownloadURL == "" {
+		t.Fatal("download URL is empty")
+	}
+	if uploads.Load() != 2 || listed.Load() != 1 || deleted.Load() != 1 {
+		t.Fatalf("uploads=%d listed=%d deleted=%d, want 2/1/1", uploads.Load(), listed.Load(), deleted.Load())
+	}
+}
+
+func TestRetryDelayForErrorUsesRetryAfterHeader(t *testing.T) {
+	client := githubClient{}
+	delay := client.retryDelayForError(1, githubStatusError{
+		StatusCode: http.StatusTooManyRequests,
+		Status:     "429 Too Many Requests",
+		Headers:    http.Header{"Retry-After": []string{"3"}},
+	})
+	if delay != 3*time.Second {
+		t.Fatalf("delay=%s, want 3s", delay)
+	}
+}
+
+func TestRetryDelayForErrorFallsBackForSecondaryLimit(t *testing.T) {
+	client := githubClient{}
+	delay := client.retryDelayForError(1, githubStatusError{
+		StatusCode: http.StatusForbidden,
+		Status:     "403 Forbidden",
+		Headers:    http.Header{},
+	})
+	if delay != time.Minute {
+		t.Fatalf("delay=%s, want 1m", delay)
+	}
+}
+
+func TestListReleaseAssetsPaginates(t *testing.T) {
+	var pages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/repos/owner/repo/releases/77/assets" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		pages = append(pages, r.URL.Query().Get("page"))
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "1" {
+			assets := make([]releaseAsset, 100)
+			for i := range assets {
+				assets[i] = releaseAsset{ID: int64(i + 1), Name: fmt.Sprintf("asset-%03d", i)}
+			}
+			_ = json.NewEncoder(w).Encode(assets)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":101,"name":"last"}]`))
+	}))
+	defer server.Close()
+	client := githubClient{repo: "owner/repo", token: "token", client: server.Client(), apiURL: server.URL, retryDelay: func(int) time.Duration { return 0 }}
+	assets, err := client.listReleaseAssets(t.Context(), 77)
+	if err != nil {
+		t.Fatalf("listReleaseAssets() error = %v", err)
+	}
+	if len(assets) != 101 {
+		t.Fatalf("assets=%d, want 101", len(assets))
+	}
+	if strings.Join(pages, ",") != "1,2" {
+		t.Fatalf("pages=%v, want 1,2", pages)
 	}
 }
 
@@ -189,6 +289,9 @@ func TestPublishReleaseAssetsRewritesManifestAfterUploads(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/releases/tags/symbolname-db-simulate-assets":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"id":1,"upload_url":"%s/upload{?name,label}","assets":[]}`, serverURL)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/owner/repo/releases/1/assets":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == "/upload":
 			name := r.URL.Query().Get("name")
 			body, _ := io.ReadAll(r.Body)
