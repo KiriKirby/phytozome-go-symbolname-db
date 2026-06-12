@@ -429,7 +429,7 @@ func writePublishSource(t *testing.T, partURLs []string) string {
 		parts = append(parts, labelname.PrebuiltGeneInfoPart{URL: rawURL, ContentLength: 2})
 	}
 	manifest := labelname.PrebuiltGeneInfoManifest{
-		SchemaVersion: "2",
+		SchemaVersion: "3",
 		Parts:         parts,
 		SHA256:        strings.Repeat("0", 64),
 		RecordCount:   1,

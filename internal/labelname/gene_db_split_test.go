@@ -262,6 +262,9 @@ func TestDownloadPrebuiltGeneInfoDatabaseFromManySplitZstdParts(t *testing.T) {
 	if len(got.RankedAliases) == 0 || got.RankedAliases[0] != "PAL1" {
 		t.Fatalf("rank from reassembled db=%v, want PAL1 first", got.RankedAliases)
 	}
+	if !containsAliasForTest(got.RankedAliases, "PAL1A") {
+		t.Fatalf("rank from reassembled db=%v, want synonym PAL1A included", got.RankedAliases)
+	}
 }
 
 func TestDownloadPrebuiltGeneInfoDatabaseRetriesTransientSplitPartFailure(t *testing.T) {
@@ -469,4 +472,13 @@ func partIndexFromPath(t testing.TB, path string) int {
 		t.Fatalf("invalid part number in path %q", path)
 	}
 	return partNumber - 1
+}
+
+func containsAliasForTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

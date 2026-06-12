@@ -148,7 +148,7 @@ func runSimulatedArchiveBuild(outPath string, manifestPath string, downloadURL s
 	}
 	fixed := time.Date(2026, 6, 10, 5, 29, 0, 0, time.UTC)
 	manifest := labelname.PrebuiltGeneInfoManifest{
-		SchemaVersion:       "2",
+		SchemaVersion:       "3",
 		URL:                 "",
 		SHA256:              sum,
 		ContentLength:       archiveSize,

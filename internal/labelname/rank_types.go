@@ -78,6 +78,24 @@ func normalizeAliasKey(value string) string {
 	return strings.ToUpper(strings.TrimSpace(value))
 }
 
+func uniqueStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := normalizeAliasKey(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func symbolFamily(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {

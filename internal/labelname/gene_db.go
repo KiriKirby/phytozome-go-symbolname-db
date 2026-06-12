@@ -34,7 +34,7 @@ const (
 	GeneInfoDirectoryURL            = "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/"
 	DefaultGeneInfoPGD              = "symbolname.pgd"
 	DefaultPrebuiltGeneInfoManifest = "https://raw.githubusercontent.com/KiriKirby/phytozome-go-symbolname-db/symbolname-db/symbolname/manifest.json"
-	geneDBSchemaVersion             = "2"
+	geneDBSchemaVersion             = "3"
 	geneDBBucketMeta                = "meta"
 	geneDBBucketRecords             = "records"
 	geneDBBucketIndex               = "index"
@@ -1215,37 +1215,40 @@ func (g *geneDB) rank(request AliasRankRequest) ([]rankedAlias, bool) {
 			if !ok {
 				continue
 			}
-			bestScore := -1
-			for _, term := range hits {
-				score := term.Weight
-				symbol := strings.TrimSpace(record.Symbol)
-				if symbol == "" || symbol == "-" {
+			for _, candidate := range record.symbolNameCandidates() {
+				key := normalizeAliasKey(candidate)
+				if key == "" {
 					continue
 				}
-				if strings.EqualFold(term.Raw, symbol) {
-					score += 80
+				bestScore := -1
+				for _, term := range hits {
+					score := term.Weight
+					if strings.EqualFold(term.Raw, candidate) {
+						score += 220
+					} else if record.hasSymbolNameCandidateEqualTo(term.Raw) {
+						score += 20
+					}
+					if strings.EqualFold(term.Raw, record.GeneID) || strings.EqualFold(term.Raw, record.LocusTag) {
+						score += 60
+					}
+					if term.TaxID != "" && term.TaxID == record.TaxID {
+						score += 40
+					}
+					if score > bestScore {
+						bestScore = score
+					}
 				}
-				if strings.EqualFold(term.Raw, record.GeneID) || strings.EqualFold(term.Raw, record.LocusTag) {
-					score += 60
+				if bestScore < 0 {
+					continue
 				}
-				if term.TaxID != "" && term.TaxID == record.TaxID {
+				score := bestScore
+				if strings.EqualFold(candidate, record.Symbol) {
 					score += 40
 				}
-				if score > bestScore {
-					bestScore = score
+				current := scores[key]
+				if score > current.Score || (score == current.Score && len(candidate) < len(current.Text)) {
+					scores[key] = rankedAlias{Text: candidate, Score: score, Family: symbolFamily(candidate)}
 				}
-			}
-			if bestScore < 0 {
-				continue
-			}
-			symbol := strings.TrimSpace(record.Symbol)
-			if symbol == "" || symbol == "-" {
-				continue
-			}
-			key := normalizeAliasKey(symbol)
-			current := scores[key]
-			if bestScore > current.Score || (bestScore == current.Score && len(symbol) < len(current.Text)) {
-				scores[key] = rankedAlias{Text: symbol, Score: bestScore, Family: symbolFamily(symbol)}
 			}
 		}
 		return nil
@@ -1715,13 +1718,13 @@ func buildGeneInfoDatabaseFromGZFiles(gzPaths []string, dbPath string, remote Ge
 }
 
 func encodeGeneRecord(record geneRecord) []byte {
-	fields := [...]string{record.TaxID, record.GeneID, record.Symbol, record.LocusTag}
+	fields := [...]string{record.TaxID, record.GeneID, record.Symbol, record.LocusTag, record.Synonyms}
 	size := 1
 	for _, field := range fields {
 		size += binary.MaxVarintLen64 + len(field)
 	}
 	out := make([]byte, 0, size)
-	out = append(out, 1)
+	out = append(out, 2)
 	for _, field := range fields {
 		out = binary.AppendUvarint(out, uint64(len(field)))
 		out = append(out, field...)
@@ -1784,11 +1787,11 @@ func flushPreparedGeneBatch(db *bolt.DB, batch []preparedGeneRecord) error {
 }
 
 func decodeGeneRecord(data []byte) (geneRecord, bool) {
-	if len(data) == 0 || data[0] != 1 {
+	if len(data) == 0 || data[0] != 2 {
 		return geneRecord{}, false
 	}
 	data = data[1:]
-	fields := [4]string{}
+	fields := [5]string{}
 	for i := range fields {
 		length, n := binary.Uvarint(data)
 		if n <= 0 || length > uint64(len(data[n:])) {
@@ -1804,6 +1807,7 @@ func decodeGeneRecord(data []byte) (geneRecord, bool) {
 		GeneID:   fields[1],
 		Symbol:   fields[2],
 		LocusTag: fields[3],
+		Synonyms: fields[4],
 	}, true
 }
 
@@ -1959,6 +1963,26 @@ func splitGeneInfoList(value string) []string {
 		}
 	}
 	return out
+}
+
+func (r geneRecord) symbolNameCandidates() []string {
+	values := make([]string, 0, 1+strings.Count(r.Synonyms, "|")+strings.Count(r.Synonyms, ";")+strings.Count(r.Synonyms, ","))
+	values = append(values, r.Symbol)
+	values = append(values, splitGeneInfoList(r.Synonyms)...)
+	return uniqueStrings(values)
+}
+
+func (r geneRecord) hasSymbolNameCandidateEqualTo(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, candidate := range r.symbolNameCandidates() {
+		if strings.EqualFold(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanGeneInfoValue(value string) string {
