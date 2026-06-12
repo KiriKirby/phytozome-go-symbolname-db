@@ -1,0 +1,11 @@
+{
+  "schema_version": "3",
+  "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-sample-assets/symbolname-db-sample-27443131512-1-symbolname.pgd.zst",
+  "sha256": "1d4b725d07b8a30ee5698d948e1a98bffa95b25930f0e90cdb5338c699ef4b38",
+  "content_length": 800,
+  "record_count": 2,
+  "generated_at": "2026-06-12T21:07:43.064820022Z",
+  "source_url": "sample://gene_info.gz",
+  "source_last_modified": "Wed, 10 Jun 2026 05:29:00 GMT",
+  "source_content_length": 168
+}
