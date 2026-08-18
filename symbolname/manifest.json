@@ -1,0 +1,24 @@
+{
+  "schema_version": "3",
+  "url": "",
+  "parts": [
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-assets/symbolname-db-32094575964-1-symbolname.pgd.zst.part001",
+      "content_length": 1073741824
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-assets/symbolname-db-32094575964-1-symbolname.pgd.zst.part002",
+      "content_length": 1073741824
+    },
+    {
+      "url": "https://github.com/KiriKirby/phytozome-go-symbolname-db/releases/download/symbolname-db-assets/symbolname-db-32094575964-1-symbolname.pgd.zst.part003",
+      "content_length": 942237513
+    }
+  ],
+  "sha256": "2ab23fffe3bbd39ba76f7e3c23a9ba48e7c08408db1eb980309a5761e3692e04",
+  "record_count": 74362957,
+  "generated_at": "2026-08-18T06:55:54.189501302Z",
+  "source_url": "https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/",
+  "source_last_modified": "Mon, 17 Aug 2026 11:30:53 GMT",
+  "source_content_length": 1595283241
+}
